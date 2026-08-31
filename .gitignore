@@ -1,0 +1,12 @@
+# raw data — distributed via GEO
+data/raw/
+output/
+*.RData
+*.rds
+.Rhistory
+.RData
+.Rproj.user/
+
+# local paths
+config.yml
+sessionInfo.txt

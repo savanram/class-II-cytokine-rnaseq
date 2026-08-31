@@ -1,0 +1,7 @@
+# Copy to config.yml and set your paths. config.yml is gitignored.
+
+default:
+  output_dir: "output"
+  counts:
+    P560-2: "/path/to/240201-P560-2_RawGeneCounts.csv"
+    P560-4: "/path/to/P560-4_gene_counts.csv"
