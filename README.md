@@ -1,296 +1,242 @@
-# Running Bioinformatics Analyses on AWS
+# HaCaT Cytokine Stimulation RNA-seq Analysis
 
-> *For Olivia - congratulations on graduating from the Ram Lab @ UW. May this be one less hurdle between you and your next experiment.*
-> *And for Dr. Alison Greenlaw - welcome to the cloud. Trading lab-based servers for AWS is a real shift, but the core logic is the same: get your data somewhere, do the work, save it somewhere safe. You've got this.*
+Bulk RNA-seq analysis pipeline for cytokine-stimulated HaCaT keratinocytes,
+examining IL-19/-20/-22/-24/-26 and IFN-λ3 signaling under two independent
+pathway-perturbation conditions:
 
-If you have sequencing data that is too big for your laptop - maybe a few hundred GB of FASTQ files - and you need somewhere with more horsepower to align reads, run featureCounts, or process an nf-core pipeline. This tutorial walks you through renting that horsepower from AWS, running your analysis, and shutting everything down cleanly (so you don't get a surprise bill).
+- **Endocytosis inhibition** — DMSO vehicle vs. Dynasore pretreatment
+- **JAK/STAT inhibition** — Mock vs. pan-JAK inhibitor (panJAKi) pretreatment
 
-No prior AWS experience needed. By the end, you should understand not just what to type, but why.
-
----
-
-## 1. The Big Picture
-
-Think of AWS like renting a fully equipped lab bench by the hour, instead of buying one outright.
-
-- EC2 is the bench itself - a computer you can configure with however much CPU and RAM your analysis needs.
-- S3 is the building's archive room - cheap, durable, long-term storage for your raw data and final results. It's not where you compute; it's where you stash things before and after.
-- You rent the bench (EC2), pull your samples out of the archive (S3), do the work, put your results back in the archive, then give the bench back so you stop paying for it.
-
-That last step matters more than any other line in this tutorial. An EC2 instance left running over a weekend is the single most common way people accidentally rack up a large AWS bill.
-
-### The workflow, visually
-
-```
- Your Laptop
-     │  ssh
-     ▼
- EC2 Instance  ◄──────────────┐
-     │                        │
-     │ 1. pull FASTQs         │ 4. push results
-     ▼                        │
-   S3 Bucket (raw data)   S3 Bucket (results)
-                              ▲
-     2. run alignment ────────┘
-     3. write results
-```
-
-Five things happen in order: fetch data → compute → save results → tear down the instance. Everything below is just the detail behind those four verbs.
+Each condition is analyzed by its own end-to-end script, sharing an identical
+analytical structure so results are directly comparable across the two
+perturbations.
 
 ---
 
-## 2. Vocabulary You Will Actually Use
+## Data availability
 
-Do not memorize this - skim it once, then refer back when a term comes up later.
+The RNA-seq dataset characterizing IL-10 family cytokine signaling responses
+after dynasore and JAK inhibition can be accessed via the Gene Expression
+Omnibus (GEO) database under accession numbers GSE295892 (Dynasore) and
+GSE344451 (panJAKi).
 
-| Term | What it actually is | Analogy |
-|---|---|---|
-| EC2 | A virtual computer you rent by the hour/second | The lab bench |
-| EBS | The hard drive attached to that computer | The drawer under the bench where you keep working files |
-| Snapshot | A backup copy of an EBS drive | A photocopy of everything in that drawer, stored safely elsewhere |
-| S3 | Long-term, cheap storage, separate from any running computer | The archive room down the hall |
-| Key Pair | A cryptographic key that proves it's you logging in | Your personal key to the building - lose it, and you can't get back in |
-| Security Group | A firewall - controls what traffic can reach your instance | The bouncer deciding who's allowed through the door |
-
----
-
-## 3. Before You Launch: Four Decisions
-
-When you create an EC2 instance, AWS asks you to choose four things. Here's how to think about each one.
-
-### a) Instance type - how much CPU/RAM?
-
-This is the size of your rented bench, and it directly affects your hourly cost. A good way to think about it:
-
-```
-T2 Micro        →  for testing the workflow / getting familiar with the console
-C3.4XLarge      →  for an actual compute job (alignment, featureCounts, etc.)
-```
-
-Start small with a T2 Micro just to confirm everything connects and works the way you expect. Once you're ready to run a real job on real data, switch to something like a C3.4XLarge for the extra CPU and memory. If your pipeline still runs out of memory, the fix is to size up further next time, not to fight with the software.
-
-Or give your file size related prompt to Claude and budget and ask for suitable instance type.
-
-### b) Image (AMI) - which operating system?
-
-This is the software your bench comes pre-loaded with. Amazon Linux is a great default starting point - it comes with a lot of common dependencies pre-installed, which saves you setup time, and it's well-supported within the AWS ecosystem itself. Ubuntu is the other common choice in bioinformatics (most external tools and tutorials assume it), but Amazon Linux is the easier on-ramp if you're just getting started:
-
-```
-Amazon Linux  (or Ubuntu 22.04, if your tools specifically expect it)
-```
-
-One thing to note if you choose Amazon Linux: your SSH username and package manager will be different from Ubuntu - more on that in Step 4.
-
-### c) Storage (EBS) - how much disk space?
-
-This is your working drawer space for FASTQs, BAMs, intermediate files, and results. Sequencing data is bulky, so don't be stingy:
-
-```
-2.4 TB, GP3 volume type
-```
-
-GP3 is the default volume type, and it's a good fit here because it's cost-effective and performs well for general-purpose workloads that don't have heavy, constant IO demands - which covers most bioinformatics pipelines. If 2.4 TB feels like overkill for your dataset, scale it down - but as a rule of thumb, budget for roughly 3-4x the size of your raw FASTQs, since alignment produces large intermediate files (sorted BAMs, indices, temp files) before you get to your final results.
-
-### d) Key Pair & Security Group - how do you get in, and who else can?
-
-- Key Pair: generate one and save the `.pem` file somewhere safe. There is no "forgot password" recovery for this - if you lose it, you lose access to that instance.
-- Security Group: at minimum, allow inbound traffic on:
-
-```
-SSH - Port 22
-```
-
-This is the only door you need open for this workflow.
+Analysis code is archived at Zenodo under DOI
+[10.5281/zenodo.XXXXXXX](https://doi.org/10.5281/zenodo.XXXXXXX). That DOI
+resolves to the most recent archived version; development continues in this
+repository.
 
 ---
 
-## 4. Connecting to Your Instance
-
-Once your instance is running, AWS gives you a public IP address. From your laptop's terminal:
-
-```bash
-# Go to wherever you saved the key
-cd ~/Downloads
-
-# Lock down the key's permissions (AWS requires this - SSH will refuse to use an unprotected key)
-chmod 400 my-key.pem
-
-# Connect - username depends on which AMI you picked
-ssh -i my-key.pem ec2-user@<PUBLIC-IP>     # Amazon Linux
-ssh -i my-key.pem ubuntu@<PUBLIC-IP>       # Ubuntu
-```
-
-You will know it worked when your prompt changes to something like:
+## Repository contents
 
 ```
-[ec2-user@ip-172-31-xx-xx ~]$     # Amazon Linux
-ubuntu@ip-172-31-xx-xx:~$         # Ubuntu
+repository_root/
+├── README.md                                (this file)
+├── install_packages.R                       run once, before any analysis script
+├── R/
+│   ├── 00_setup.R                           shared constants, paths, save helpers
+│   └── contrasts.R                          contrast definitions per study
+├── analysis/
+│   ├── Ram_Dynasore_BulkRNAseq_Analysis.R   Dynasore vs. DMSO analysis (study code P560-2)
+│   └── Ram_panJAKi_BulkRNAseq_Analysis.R    panJAKi vs. Mock analysis (study code P560-4)
+├── data/metadata/                           sample annotation
+├── render_all.R                             rebuild everything
+├── P560-2/
+│   ├── data/                                place required input files here (see below)
+│   ├── DoRothEA/                            place BEST_viperRegulon.rdata here
+│   └── results/                             generated by the analysis script
+└── P560-4/
+    ├── data/
+    ├── DoRothEA/                            place BEST_viperRegulon.rdata here (downloaded separately per study)
+    └── results/
 ```
 
-You are now inside the cloud computer, not your laptop. Everything you type from here runs on AWS.
-
-Quick note on package managers: if you went with Amazon Linux, you'll use `yum` (or `dnf` on newer versions) to install software. On Ubuntu, that's `apt`. Same idea, different command.
+`P560-2/` and `P560-4/` are created automatically the first time each analysis
+script is run, but the `data/` and `DoRothEA/` subfolders must be populated
+with the required input files (below) before the script will proceed. Each
+script computes its `DoRothEA/` reference path relative to its own study
+code, so `BEST_viperRegulon.rdata` must be downloaded into both study folders
+separately rather than shared from one location.
 
 ---
 
-## 5. Organize Before You Work
+## 1. Sequencing and initial data processing
 
-A few seconds of setup now saves a lot of confusion later, especially once you have multiple samples and log files flying around.
+RNA sequencing and initial processing through gene-level count generation
+were performed by the Benaroya Research Institute Genomics Core
+(RRID:SCR_026658):
 
-```bash
-mkdir aws-bioinformatics-project
-cd aws-bioinformatics-project
-mkdir data scripts results logs
-```
+> Sequencing libraries were constructed using the NexteraXT DNA sample
+> preparation kit with unique dual indexes (Illumina) to generate
+> Illumina-compatible barcoded libraries. Libraries were pooled and
+> quantified using a Qubit Fluorometer (Life Technologies). Sequencing of
+> pooled libraries was carried out on a NextSeq 2000 sequencer using an
+> XLEAP-SBS flowcell (Illumina) with paired-end 59-base reads (Illumina)
+> with a target depth of 5 million reads per sample. Base calls were
+> processed to FASTQs on BaseSpace (Illumina). A base call quality-trimming
+> step was applied to remove low-confidence base calls from the ends of
+> reads using fastp (0.23.1). The FASTQs were aligned to the human genome
+> GRCh38.91 using STAR (2.7.11a), and gene counts were generated using
+> htseq-count (2.0.2). QC and metrics analysis was performed using fastQC
+> (0.12.1) and the Picard family of tools (3.1.0).
 
-```
-aws-bioinformatics-project/
-├── data/       ← raw FASTQs go here
-├── scripts/    ← your analysis scripts
-├── results/    ← anything you intend to keep
-└── logs/       ← stdout/stderr from your runs
-```
-
-Keeping `results/` and `logs/` separate from `data/` makes Step 8 (uploading) much less error-prone - you just sync two folders, not a mess of mixed files.
-
----
-
-## 6. Pulling Data Down from S3
-
-First, confirm you can see your bucket:
-
-```bash
-aws s3 ls
-```
-
-Then copy your sequencing files into the `data/` folder you just made:
-
-```bash
-aws s3 sync s3://my-bucket/fastq/ data/
-```
-
-`sync` is preferable to `cp` here - if the transfer is interrupted and you run it again, it only copies what's missing instead of starting over.
-
-Double-check the files actually arrived before you go further:
-
-```bash
-ls data
-```
+The R scripts in this repository begin downstream of this point, taking the
+raw gene-level count matrices as their starting input (see §4).
 
 ---
 
-## 7. Running Your Analysis
+## 2. System requirements
 
-This is the part that's specific to your actual experiment - common tools include:
-
-- Rsubread / featureCounts - read counting for RNA-seq
-- Nextflow + nf-core pipelines - standardized, reproducible pipelines for alignment, variant calling, etc.
-
-While something is running, keep an eye on whether your instance can actually handle it:
-
-```bash
-htop      # live CPU and memory usage
-free -h   # how much RAM is free, human-readable
-df -h     # how much disk space is left, human-readable
-```
-
-If `df -h` starts creeping toward 100%, stop and clean up intermediate files before your job crashes mid-run from a full disk - that's a much worse time to discover the problem.
+- **R ≥ 4.4.0**
+- Internet access at runtime — the pipeline queries Ensembl BioMart, falls
+  back to AnnotationHub for unresolved gene annotations, and retrieves the
+  PROGENy pathway model via OmnipathR/decoupleR. None of these are bundled
+  with the repository.
+- On Linux, several Bioconductor dependencies (`biomaRt`, `ComplexHeatmap`,
+  `edgeR`) require system libraries (e.g. `libcurl`, `libxml2`) to compile
+  from source. On Windows/Mac, Rtools / Xcode command line tools are needed
+  for the same reason.
 
 ---
 
-## 8. Don't Let a Disconnect Kill Your Job
+## 3. Installing dependencies
 
-If your laptop's connection drops - wifi hiccup, your laptop goes to sleep, you close the lid - a job running directly in that SSH session dies with it. `screen` solves this by running your job in a session that keeps going on the AWS side, independent of your laptop's connection.
+Run once, before either analysis script:
 
-```bash
-# Start a named session
-screen -S alignment
-
-# ...run your analysis here as normal...
-
-# Detach without stopping anything (Ctrl+A, then D)
+```r
+source("install_packages.R")
 ```
 
-Your job keeps running. You can close your laptop, walk away, come back tomorrow, and:
-
-```bash
-screen -r alignment
-```
-
-...and you are looking at the same session, picking up exactly where you left off.
+This installs all required CRAN and Bioconductor packages and writes
+`sessionInfo.txt` recording R version, package versions, and platform.
+Together with the `session_info.txt` written by each analysis script at the
+end of its run (see §6), this forms the complete version record for the
+pipeline as executed by the authors.
 
 ---
 
-## 9. Saving Your Results Back to S3
+## 4. Required input data
 
-Once your analysis finishes, push everything worth keeping back to the archive room - your EC2 instance is temporary, but S3 is durable.
+Raw count matrices and sample metadata are deposited in GEO (see
+**Data availability**, above). Download and place them locally as follows.
 
-```bash
-aws s3 sync results/ s3://my-results/project/results/
-aws s3 sync logs/ s3://my-results/project/logs/
-```
+### Dynasore analysis (study code `P560-2`)
 
----
+Place in `P560-2/data/`:
 
-## 10. Shutting Down Safely
-
-This is the step that actually saves you money, so don't skip the verification.
-
-Before stopping or terminating, confirm:
-- ✅ Results are uploaded to S3
-- ✅ Scripts are backed up somewhere (S3, GitHub, etc.)
-- ✅ Logs are saved
-
-Verify it landed, don't just trust that the sync command "probably worked":
-
-```bash
-aws s3 ls s3://my-results/project/results/
-```
-
-Then choose:
-
-| Action | When to use it |
+| File | Description |
 |---|---|
-| Stop | You'll likely come back to this same instance later. EBS storage charges continue, but you stop paying for compute. |
-| Terminate | The project is fully done. Everything on the instance (other than what you saved to S3) is gone for good. |
+| `240201-P560-2_RawGeneCounts.csv` | Raw gene-level count matrix |
+| `P560-2_Final Annotation.xlsx` | Sample annotation/metadata |
+
+Place in `P560-2/DoRothEA/`:
+
+| File | Source |
+|---|---|
+| `BEST_viperRegulon.rdata` | [DoRothEA public repository](https://github.com/deeenes/DoRothEA/blob/master/data/TFregulons/Robjects_VIPERformat/consensus/BEST_viperRegulon.rdata) |
+
+### panJAKi analysis (study code `P560-4`)
+
+Place in `P560-4/data/`:
+
+| File | Description |
+|---|---|
+| `P560-4_gene_counts.csv` | Raw gene-level count matrix (gene symbols mapped directly from this file — no separate lookup file required) |
+| `P560-4_sample_metadata.csv` | Sample metadata |
+| `P560-4_annotations.csv` | Library annotation |
+
+Place in `P560-4/DoRothEA/`:
+
+| File | Source |
+|---|---|
+| `BEST_viperRegulon.rdata` | Same DoRothEA link as above — download separately into each study's `DoRothEA/` folder |
+
+Both scripts check for their required files on startup and report exactly
+which are missing, with the expected path for each, before doing any
+analysis.
 
 ---
 
-## 11. Mistakes That Catch Almost Everyone Once
+## 5. Running the pipeline
 
-- ❌ Terminating an instance before confirming results actually made it to S3
-- ❌ Losing the `.pem` key (write down where you saved it - today)
-- ❌ Running out of disk mid-job because intermediate files weren't accounted for
-- ❌ Skipping `screen` and losing hours of progress to a dropped connection
-- ❌ Downloading data into the wrong folder, then losing track of what's where
-- ❌ Leaving an instance running overnight "just in case" - this is the #1 source of unexpectedly large bills
+From the repository root, in R:
 
----
-
-## 12. Quick Reference / Cheat Sheet
-
-```bash
-# Connect to your instance
-ssh -i my-key.pem ec2-user@<PUBLIC-IP>   # Amazon Linux
-ssh -i my-key.pem ubuntu@<PUBLIC-IP>     # Ubuntu
-
-# Pull data down from S3
-aws s3 sync s3://bucket/data data/
-
-# Monitor while running
-htop
-free -h
-df -h
-
-# Push results up to S3
-aws s3 sync results/ s3://bucket/results/
-
-# Reconnect to a screen session after disconnecting
-screen -r
+```r
+source("analysis/Ram_Dynasore_BulkRNAseq_Analysis.R")
+source("analysis/Ram_panJAKi_BulkRNAseq_Analysis.R")
 ```
 
+The two scripts are independent and can be run in either order. Each performs:
+
+1. Input loading and validation, gene annotation (Ensembl BioMart +
+   AnnotationHub fallback for unresolved genes)
+2. Differential expression via the `edgeR` glmQLF pipeline (cytokine ±
+   pretreatment vs. Mock/DMSO baseline), with BCV and QL dispersion QC plots
+3. Hierarchical clustering of significant DEGs across contrasts, plotted as
+   a heatmap
+4. Cluster-level transcription factor enrichment against the DoRothEA
+   regulon reference (tiers A–C), plotted as lollipop plots and folded back
+   into the heatmap annotation
+5. PROGENy pathway activity scoring per sample, with pretreatment-arm
+   comparisons plotted as per-pathway bar plots and summary dot plots for
+   pathways of interest (JAK-STAT, MAPK, NF-κB)
+
+Each script's own header comment documents its exact study design and
+required inputs in more detail.
+
 ---
 
-## One-Sentence Summary
+## 6. Outputs
 
-Rent the bench (EC2) → pull samples from the archive (S3) → compute → push results back to the archive (S3) → return the bench (stop/terminate) - and always verify step four before step five.
+All outputs are written to `<study_code>/results/`:
+
+| Subfolder | Contents |
+|---|---|
+| `edgeR_RNAseq_QC/` | BCV and QL dispersion diagnostic plots |
+| `edgeR_glmQLF_differential_analysis/` | Combined glmQLF and glmTreat DE result tables (all contrasts), plus a sample cross-reference table |
+| `heatmap_gene_clustering/` | Gene-to-cluster assignments from hierarchical clustering |
+| `Heatmap/` | DEG heatmap (initial version, and a version updated with DoRothEA TF annotations) |
+| `TF_enrichment_DoRothEA/cluster<N>/` | Per-cluster DoRothEA enrichment results and lollipop plots |
+| `PROGENy_pathway_enrichment_bar_plots/` | Per-pathway bar plots comparing pretreatment arms across cytokines |
+| `PROGENy_pathway_enrichment_dot_plot/` | Summary dot plots for pathways of interest |
+| `PROGENy_pathway_enrichment_results/` | Per-sample pathway activity scores, differential activity results, gene and sample metadata tables |
+| `session_info.txt` | Full R session info captured at the end of the run |
+
+Each figure is saved as PDF, PNG, and SVG.
+
+---
+
+## 7. Reproducibility notes
+
+- **Version tracking:** `sessionInfo.txt` records what was installed;
+  `<study_code>/results/session_info.txt` records what was actually loaded
+  during that specific analysis run. Both are included as part of this
+  publication's supplementary materials.
+- **External data dependencies:** gene annotation (Ensembl BioMart /
+  AnnotationHub) and the PROGENy pathway model (via OmnipathR) are retrieved
+  live at runtime rather than bundled with this repository. These upstream
+  resources can be updated independently of this code, which is an
+  additional source of variability beyond R package versions; the
+  `session_info.txt` for each run does not capture the state of these
+  external databases at the time of retrieval.
+- **Design note:** both scripts model biological replicate as a blocking
+  covariate in the `edgeR` design matrix, since replicates are matched
+  across all conditions within a study.
+
+---
+
+## Contributors
+
+**Gargi Mishra**, Postdoctoral Fellow — primary contributor. Conceptualization
+of the Dynasore analysis, primary analysis code, repository maintenance.
+
+**Isaac M. Barber-Axthelm**, DVM, MS, PhD, Acting Assistant Professor —
+panJAKi arm and pathway analyses, code streamlining.
+
+---
+
+## Acknowledgments
+
+We would like to acknowledge the Benaroya Research Institute Genomics Core
+(RRID:SCR_026658) for RNA-sequencing support. The M.J. Murdock Charitable
+Trust generously supported the equipment used by this core facility.
