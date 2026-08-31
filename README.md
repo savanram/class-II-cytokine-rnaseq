@@ -1,13 +1,23 @@
-# HaCaT Cytokine Stimulation RNA-seq Analysis
+# RNA-seq analysis of class II cytokine dependent gene signatures in keratinocytes upon inhibition of endocytosis and JAK activity
 
-Bulk RNA-seq analysis pipeline for cytokine-stimulated HaCaT keratinocytes,
-examining IL-19/-20/-22/-24/-26 and IFN-λ3 signaling under two independent
-pathway-perturbation conditions:
+## Cell model and experimental design
 
-- **Endocytosis inhibition** — DMSO vehicle vs. Dynasore pretreatment
-- **JAK/STAT inhibition** — Mock vs. pan-JAK inhibitor (panJAKi) pretreatment
+HaCaT cells were cultured in Ca²⁺-free DMEM supplemented with 10% FBS,
+100 μg/mL streptomycin, and 100 U/mL penicillin. For cell differentiation,
+cells were cultured for 48 h in a growth medium supplemented with 2 mM CaCl2.
 
-Each condition is analyzed by its own end-to-end script, sharing an identical
+Bulk RNA-seq was performed on differentiated HaCaT cells pre-treated with
+Dynasore (dynamin inhibitor, 50 μg/mL) or the pan-JAK inhibitor
+(JAK inhibitor-I, 50 nM, 3 h prior to cytokine treatment), and stimulated with
+recombinant human IL-19, IL-20, IL-22, IL-24, IL-26, and IFNλ3 at 100 ng/mL
+for 6 h. All treatments were carried out in biological triplicates.
+
+| Arm | Study code | Treatment levels |
+|---|---|---|
+| Endocytosis inhibition | P560-2 | DMSO (control) or Dynasore, combined with stimulation by cytokines |
+| JAK inhibition | P560-4 | Mock or pan-JAK inhibitor, combined with stimulation by cytokines |
+
+Each arm is analyzed by its own end-to-end script, sharing an identical
 analytical structure so results are directly comparable across the two
 perturbations.
 
@@ -88,7 +98,7 @@ raw gene-level count matrices as their starting input (see §4).
 ## 2. System requirements
 
 - **R ≥ 4.4.0**
-- Internet access at runtime — the pipeline queries Ensembl BioMart, falls
+- Internet access at runtime. The pipeline queries Ensembl BioMart, falls
   back to AnnotationHub for unresolved gene annotations, and retrieves the
   PROGENy pathway model via OmnipathR/decoupleR. None of these are bundled
   with the repository.
@@ -141,7 +151,7 @@ Place in `P560-4/data/`:
 
 | File | Description |
 |---|---|
-| `P560-4_gene_counts.csv` | Raw gene-level count matrix (gene symbols mapped directly from this file — no separate lookup file required) |
+| `P560-4_gene_counts.csv` | Raw gene-level count matrix (gene symbols mapped directly from this file; no separate lookup file required) |
 | `P560-4_sample_metadata.csv` | Sample metadata |
 | `P560-4_annotations.csv` | Library annotation |
 
@@ -149,7 +159,7 @@ Place in `P560-4/DoRothEA/`:
 
 | File | Source |
 |---|---|
-| `BEST_viperRegulon.rdata` | Same DoRothEA link as above — download separately into each study's `DoRothEA/` folder |
+| `BEST_viperRegulon.rdata` | Same DoRothEA link as above; download separately into each study's `DoRothEA/` folder |
 
 Both scripts check for their required files on startup and report exactly
 which are missing, with the expected path for each, before doing any
@@ -225,18 +235,21 @@ Each figure is saved as PDF, PNG, and SVG.
 
 ---
 
-## Contributors
+## Code contributors
 
-**Gargi Mishra**, Postdoctoral Fellow — primary contributor. Conceptualization
+**Gargi Mishra**, Postdoctoral Fellow. Primary contributor: conceptualization
 of the Dynasore analysis, primary analysis code, repository maintenance.
 
-**Isaac M. Barber-Axthelm**, DVM, MS, PhD, Acting Assistant Professor —
-panJAKi arm and pathway analyses, code streamlining.
+**Isaac M. Barber-Axthelm**, DVM, MS, PhD, Acting Assistant Professor.
+panJAKi arm and pathway analyses, code streamlining, supervision of the final
+analysis.
+
+**Ram Savan**, PhD, Professor, Department of Immunology, University of
+Washington. Project conceptualization and supervision.
 
 ---
 
 ## Acknowledgments
 
 We would like to acknowledge the Benaroya Research Institute Genomics Core
-(RRID:SCR_026658) for RNA-sequencing support. The M.J. Murdock Charitable
-Trust generously supported the equipment used by this core facility.
+(RRID:SCR_026658) for RNA-sequencing support.
