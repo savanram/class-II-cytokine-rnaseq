@@ -1,12 +1,18 @@
-# raw data — distributed via GEO
-data/raw/
-output/
+# inputs: download from GEO (GSE295892, GSE344451) — see README
+P560-2/data/
+P560-2/DoRothEA/
+P560-4/data/
+P560-4/DoRothEA/
+
+# generated
+P560-2/results/
+P560-4/results/
+shared_results/
+docs/
+
 *.RData
 *.rds
 .Rhistory
 .RData
 .Rproj.user/
-
-# local paths
-config.yml
-sessionInfo.txt
+.DS_Store

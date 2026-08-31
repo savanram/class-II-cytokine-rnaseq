@@ -11,16 +11,13 @@ for (fn in c("setdiff","intersect","union","setequal"))
   conflict_prefer(fn, "base", quiet = TRUE)
 conflict_prefer("simplify", "clusterProfiler", quiet = TRUE)
 
-if (!file.exists(here::here("config.yml")))
-  stop("no config.yml -- copy config.example.yml and set your paths")
-CONF <- config::get(file = here::here("config.yml"))
-
 DATASETS <- list(
   "P560-2" = list(
     label       = "Dynasore",
     inhibitor   = "Dynasore",
     vehicle     = "DMSO",
     base_arm    = "Base_Dynasore",
+    counts      = "240201-P560-2_RawGeneCounts.csv",
     interaction = TRUE
   ),
   "P560-4" = list(
@@ -28,6 +25,7 @@ DATASETS <- list(
     inhibitor   = "JAKi",
     vehicle     = "DMSO",
     base_arm    = NA_character_,   # no JAKi-only arm; interaction not identifiable
+    counts      = "P560-4_gene_counts.csv",
     interaction = FALSE
   )
 )
@@ -36,15 +34,22 @@ if (!exists("DATASET")) stop("set DATASET before sourcing 00_setup.R")
 if (!DATASET %in% names(DATASETS)) stop("unknown DATASET: ", DATASET)
 
 CFG <- DATASETS[[DATASET]]
-COUNT_FILE <- CONF$counts[[DATASET]]
-if (is.null(COUNT_FILE)) stop("no counts path in config.yml for ", DATASET)
-stopifnot(file.exists(COUNT_FILE))
 
-OUT_DIR    <- file.path(CONF$output_dir, DATASET)
+# inputs live under <study code>/, as documented in the README
+STUDY_DIR   <- DATASET
+COUNT_FILE  <- file.path(STUDY_DIR, "data", CFG$counts)
+REGULON_FILE <- file.path(STUDY_DIR, "DoRothEA", "BEST_viperRegulon.rdata")
+
+missing <- c(COUNT_FILE, REGULON_FILE)[!file.exists(c(COUNT_FILE, REGULON_FILE))]
+if (length(missing))
+  stop("missing input files:\n  ", paste(missing, collapse = "\n  "),
+       "\nsee README section 4")
+
+OUT_DIR    <- file.path(STUDY_DIR, "results")
 FIG_DIR    <- file.path(OUT_DIR, "figures")
 DATA_DIR   <- file.path(OUT_DIR, "tables")
 STATE_DIR  <- file.path(OUT_DIR, "state")
-SHARED_DIR <- file.path(CONF$output_dir, "shared")
+SHARED_DIR <- file.path("shared_results")
 for (d in c(OUT_DIR, FIG_DIR, DATA_DIR, STATE_DIR, SHARED_DIR))
   dir.create(d, showWarnings = FALSE, recursive = TRUE)
 
